@@ -19,7 +19,7 @@ const uint8_t VP_C3P  = V12;  // probability of class 3 -> V12
 const uint8_t VP_C4P  = V13;  // probability of class 4 -> V13
 const uint8_t VP_PRED = V14;  // predicted class -> V14
 
-int currentLabel = 1;  
+int currentLabel = 2;  
 // 1 = clean
 // 2 = moldy
 // 3 = cleaning product
@@ -56,6 +56,12 @@ void newDataCallback(const bme68xData data, const bsecOutputs outputs, Bsec2 bse
 
 /* Create an object of the class Bsec2 */
 Bsec2 envSensor;
+float gTemp = NAN;
+float gHum  = NAN;
+float gGas  = NAN;
+float gBvoc = NAN;
+float gIaq  = NAN;
+int   gIaqAcc = -1;
 
 /* Entry point for the example */
 void setup(void)
@@ -135,14 +141,44 @@ void setup(void)
 /* Function that is looped forever */
 void loop(void)
 {
-    Blynk.run();
-    /* Call the run function often so that the library can 
-     * check if it is time to read new data from the sensor  
-     * and process it.
-     */
     if (!envSensor.run())
     {
         checkBsecStatus(envSensor);
+    }
+
+    // Only call this if Blynk is actually started
+    // Blynk.run();
+
+    static uint32_t lastLog = 0;
+    static uint32_t lastPub = 0;
+    uint32_t now = millis();
+
+    if (now - lastLog >= 20000) {
+        lastLog = now;
+
+        if (!isnan(gTemp) && !isnan(gHum) && !isnan(gGas)) {
+            Serial.print(now);
+            Serial.print(",");
+            Serial.print(gTemp);
+            Serial.print(",");
+            Serial.print(gHum);
+            Serial.print(",");
+            Serial.print(log(gGas));
+            Serial.print(",");
+            Serial.print(gBvoc);
+            Serial.print(",");
+            Serial.println(currentLabel);
+        }
+    }
+
+    if (now - lastPub >= 1000) {
+        lastPub = now;
+
+        // Only if Blynk has been initialized
+        // Blynk.virtualWrite(VP_TEMP, gTemp);
+        // Blynk.virtualWrite(VP_HUM, gHum);
+        // if (gIaqAcc > 0 && !isnan(gIaq))  Blynk.virtualWrite(VP_IAQ, gIaq);
+        // if (gIaqAcc > 0 && !isnan(gBvoc)) Blynk.virtualWrite(VP_BVOC, gBvoc);
     }
 }
 
@@ -159,93 +195,50 @@ void errLeds(void)
 
 void newDataCallback(const bme68xData data, const bsecOutputs outputs, Bsec2 bsec)
 {
-  if (!outputs.nOutputs) return;
+    if (!outputs.nOutputs) return;
 
-  // Capture values from this callback batch
-  float tempC = NAN, rh = NAN, iaq = NAN, bvoc = NAN;
-  float gasRaw = NAN, gasComp = NAN;
-  int iaqAcc = -1;
-  int runIn = -1, stab = -1;
+    float tempC = NAN, rh = NAN, iaq = NAN, bvoc = NAN;
+    float gasRaw = NAN;
+    int iaqAcc = -1;
 
-  for (uint8_t i = 0; i < outputs.nOutputs; i++)
-  {
-    const bsecData out = outputs.output[i];
-
-    switch (out.sensor_id)
+    for (uint8_t i = 0; i < outputs.nOutputs; i++)
     {
-      case BSEC_OUTPUT_IAQ:
-        iaq = out.signal;
-        iaqAcc = (int)out.accuracy;
-        break;
+        const bsecData out = outputs.output[i];
 
-      case BSEC_OUTPUT_RAW_GAS:
-        gasRaw = out.signal;
-        break;
+        switch (out.sensor_id)
+        {
+            case BSEC_OUTPUT_IAQ:
+                iaq = out.signal;
+                iaqAcc = (int)out.accuracy;
+                break;
 
-      case BSEC_OUTPUT_COMPENSATED_GAS:
-        gasComp = out.signal;
-        break;
+            case BSEC_OUTPUT_RAW_GAS:
+                gasRaw = out.signal;
+                break;
 
-      case BSEC_OUTPUT_STABILIZATION_STATUS:
-        stab = (int)out.signal;        // typically 0/1
-        break;
+            case BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE:
+                tempC = out.signal;
+                break;
 
-      case BSEC_OUTPUT_RUN_IN_STATUS:
-        runIn = (int)out.signal;       // typically 0/1
-        break;
+            case BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY:
+                rh = out.signal;
+                break;
 
-      case BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_TEMPERATURE:
-        tempC = out.signal;
-        break;
+            case BSEC_OUTPUT_BREATH_VOC_EQUIVALENT:
+                bvoc = out.signal;
+                break;
 
-      case BSEC_OUTPUT_SENSOR_HEAT_COMPENSATED_HUMIDITY:
-        rh = out.signal;
-        break;
-
-      case BSEC_OUTPUT_BREATH_VOC_EQUIVALENT:
-        bvoc = out.signal;
-        break;
-
-      default:
-        break;
+            default:
+                break;
+        }
     }
-  }
 
-  static uint32_t lastLog = 0;
-  uint32_t now = millis();
-
-  if (now - lastLog >= 3000) {   // log every 3 seconds
-  lastLog = now;
-
-  //outputs into terminal in csv file format for better data logging
-  if (!isnan(tempC) && !isnan(rh) && !isnan(gasRaw)) {
-    Serial.print(now);
-    Serial.print(",");
-    Serial.print(tempC);
-    Serial.print(",");
-    Serial.print(rh);
-    Serial.print(",");
-    Serial.print(log(gasRaw));
-    Serial.print(",");
-    Serial.print(bvoc);
-    Serial.print(",");
-    Serial.println(currentLabel);
-  }
-  }
-  // Publish to Blynk at most 1 Hz
-  static uint32_t lastPub = 0;
-  if (now - lastPub >= 1000) {
-    lastPub = now;
-
-    // Allow sending temperature/humidity immediately.
-    // Optionally gate IAQ/BVOC on accuracy instead.
-    if (!isnan(tempC)) Blynk.virtualWrite(VP_TEMP, tempC);
-    if (!isnan(rh))    Blynk.virtualWrite(VP_HUM, rh);
-
-    // Only send IAQ/BVOC once the algorithm has some confidence
-    if (iaqAcc > 0 && !isnan(iaq))  Blynk.virtualWrite(VP_IAQ, iaq);
-    if (iaqAcc > 0 && !isnan(bvoc)) Blynk.virtualWrite(VP_BVOC, bvoc);
-  }
+    if (!isnan(tempC)) gTemp = tempC;
+    if (!isnan(rh))    gHum = rh;
+    if (!isnan(gasRaw)) gGas = gasRaw;
+    if (!isnan(bvoc))  gBvoc = bvoc;
+    if (!isnan(iaq))   gIaq = iaq;
+    gIaqAcc = iaqAcc;
 }
 
 void checkBsecStatus(Bsec2 bsec)
